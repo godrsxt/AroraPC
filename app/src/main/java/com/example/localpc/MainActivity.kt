@@ -20,12 +20,17 @@ import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
@@ -160,44 +165,121 @@ fun MainScreen(onOpenCastSettings: () -> Unit) {
     var usbPassthrough by remember { mutableStateOf(RemoteInputSettings.usbPassthroughEnabled) }
     var holdDrag by remember { mutableStateOf(false) }
 
+    // Landscape layout matching the sketch: a trackpad card (with its
+    // Left/Right/Drag strip on the edge) plus an On/Off + quick-action
+    // column, then a full-width keyboard card below.
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp)
+            .padding(10.dp)
     ) {
-        Text("Aurora Remote", style = MaterialTheme.typography.headlineSmall)
-        Spacer(Modifier.height(12.dp))
-
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
         ) {
-            Button(onClick = onOpenCastSettings) { Text("Connect to Anycast") }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("USB kb/mouse -> TV", fontSize = 12.sp)
-                Switch(
-                    checked = usbPassthrough,
-                    onCheckedChange = {
-                        usbPassthrough = it
-                        RemoteInputSettings.usbPassthroughEnabled = it
-                    }
-                )
+            TrackpadCard(
+                holdDrag = holdDrag,
+                onHoldDragToggle = { holdDrag = !holdDrag },
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .weight(1f)
+            )
+
+            Spacer(Modifier.width(8.dp))
+
+            // On/Off (USB passthrough) + quick-action column, to the right
+            // of the trackpad card -- matches the sketch's side column.
+            Column(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .width(72.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Button(
+                    onClick = {
+                        usbPassthrough = !usbPassthrough
+                        RemoteInputSettings.usbPassthroughEnabled = usbPassthrough
+                    },
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    contentPadding = PaddingValues(4.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (usbPassthrough) MaterialTheme.colorScheme.secondary
+                        else Color(0xFF444444)
+                    )
+                ) {
+                    Text(if (usbPassthrough) "ON" else "OFF", fontSize = 12.sp)
+                }
+
+                // "C to A" from the sketch, read as Ctrl+A / Select All --
+                // flag it to me if you meant something else.
+                Button(
+                    onClick = {
+                        PresentationBridge.current?.sendKeyEvent(
+                            KeyEvent.KEYCODE_A, KeyEvent.META_CTRL_ON
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    contentPadding = PaddingValues(2.dp)
+                ) {
+                    Text("Ctrl+A", fontSize = 11.sp)
+                }
+
+                Button(
+                    onClick = onOpenCastSettings,
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    contentPadding = PaddingValues(2.dp)
+                ) {
+                    Text("Connect", fontSize = 11.sp)
+                }
             }
         }
 
-        Spacer(Modifier.height(16.dp))
-        Text("Trackpad", style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(8.dp))
 
-        // --- Visual trackpad: drag moves the cursor; a short drag/tap clicks ---
+        KeyboardCard(modifier = Modifier.fillMaxWidth().weight(1.1f))
+    }
+}
+
+@Composable
+fun TrackpadCard(
+    holdDrag: Boolean,
+    onHoldDragToggle: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .border(2.dp, Color.White, RoundedCornerShape(16.dp))
+            .background(Color.Black, RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(16.dp))
+    ) {
+        // Left/Right/Drag strip along the edge, as in the sketch.
+        Column(
+            modifier = Modifier
+                .fillMaxHeight()
+                .width(56.dp)
+        ) {
+            EdgeButton(label = "Left", modifier = Modifier.weight(1f)) {
+                PresentationBridge.current?.tapClick()
+            }
+            EdgeButton(label = "Right", modifier = Modifier.weight(1f)) {
+                PresentationBridge.current?.tapRightClick()
+            }
+            EdgeButton(
+                label = if (holdDrag) "Drag:ON" else "Drag:OFF",
+                modifier = Modifier.weight(1f),
+                highlighted = holdDrag
+            ) { onHoldDragToggle() }
+        }
+
+        // Main drag surface.
         var totalDx by remember { mutableStateOf(0f) }
         var totalDy by remember { mutableStateOf(0f) }
         Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(200.dp)
-                .background(Color(0xFF2B2B2B))
+                .fillMaxHeight()
+                .weight(1f)
                 .pointerInput(holdDrag) {
                     detectDragGestures(
                         onDragStart = {
@@ -220,45 +302,42 @@ fun MainScreen(onOpenCastSettings: () -> Unit) {
                             )
                         }
                     )
-                }
+                },
+            contentAlignment = Alignment.Center
         ) {
-            Text(
-                if (holdDrag) "Drag = click + move (window drag / select)" else "Drag = move cursor · tap = click",
-                modifier = Modifier.align(Alignment.Center).padding(8.dp),
-                color = Color.Gray,
-                fontSize = 12.sp
-            )
+            Text("mousepad", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
         }
+    }
+}
 
-        Spacer(Modifier.height(8.dp))
+@Composable
+fun EdgeButton(
+    label: String,
+    modifier: Modifier = Modifier,
+    highlighted: Boolean = false,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .border(1.dp, Color.White)
+            .background(if (highlighted) Color(0xFF444444) else Color.Black)
+            .clickableNoRipple(onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(label, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+    }
+}
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Button(
-                onClick = { PresentationBridge.current?.tapClick() },
-                modifier = Modifier.weight(1f)
-            ) { Text("Left Click") }
-
-            Button(
-                onClick = { PresentationBridge.current?.tapRightClick() },
-                modifier = Modifier.weight(1f)
-            ) { Text("Right Click") }
-
-            Button(
-                onClick = { holdDrag = !holdDrag },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (holdDrag) MaterialTheme.colorScheme.secondary
-                    else MaterialTheme.colorScheme.primary
-                ),
-                modifier = Modifier.weight(1f)
-            ) { Text(if (holdDrag) "Drag: ON" else "Drag: OFF") }
-        }
-
-        Spacer(Modifier.height(16.dp))
-        Text("Keyboard", style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(4.dp))
+@Composable
+fun KeyboardCard(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .border(2.dp, Color.White, RoundedCornerShape(16.dp))
+            .background(Color.Black, RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(16.dp))
+            .padding(6.dp)
+    ) {
         VirtualKeyboard()
     }
 }
@@ -266,6 +345,8 @@ fun MainScreen(onOpenCastSettings: () -> Unit) {
 @Composable
 fun VirtualKeyboard() {
     var shiftOn by remember { mutableStateOf(false) }
+    var ctrlOn by remember { mutableStateOf(false) }
+    var altOn by remember { mutableStateOf(false) }
     val rows = listOf("1234567890", "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM")
 
     fun charToKeyCode(c: Char): Int? = when {
@@ -274,11 +355,22 @@ fun VirtualKeyboard() {
         else -> null
     }
 
-    Column(modifier = Modifier.fillMaxWidth()) {
+    fun currentMeta(): Int {
+        var meta = 0
+        if (shiftOn) meta = meta or KeyEvent.META_SHIFT_ON
+        if (ctrlOn) meta = meta or KeyEvent.META_CTRL_ON
+        if (altOn) meta = meta or KeyEvent.META_ALT_ON
+        return meta
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.SpaceEvenly
+    ) {
         rows.forEach { row ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                horizontalArrangement = Arrangement.spacedBy(3.dp)
             ) {
                 row.forEach { c ->
                     KeyButton(
@@ -286,30 +378,34 @@ fun VirtualKeyboard() {
                         modifier = Modifier.weight(1f)
                     ) {
                         charToKeyCode(c)?.let { keyCode ->
-                            val meta = if (shiftOn) KeyEvent.META_SHIFT_ON else 0
-                            PresentationBridge.current?.sendKeyEvent(keyCode, meta)
+                            PresentationBridge.current?.sendKeyEvent(keyCode, currentMeta())
+                            if (ctrlOn) ctrlOn = false
+                            if (altOn) altOn = false
                         }
                     }
                 }
             }
-            Spacer(Modifier.height(2.dp))
         }
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(2.dp)
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
         ) {
-            KeyButton(
-                label = "Shift",
-                modifier = Modifier.weight(1.5f),
-                highlighted = shiftOn
-            ) { shiftOn = !shiftOn }
+            KeyButton(label = "Ctrl", modifier = Modifier.weight(1.3f), highlighted = ctrlOn) {
+                ctrlOn = !ctrlOn
+            }
+            KeyButton(label = "Alt", modifier = Modifier.weight(1.3f), highlighted = altOn) {
+                altOn = !altOn
+            }
+            KeyButton(label = "Shift", modifier = Modifier.weight(1.3f), highlighted = shiftOn) {
+                shiftOn = !shiftOn
+            }
             KeyButton(label = "Space", modifier = Modifier.weight(3f)) {
-                PresentationBridge.current?.sendKeyEvent(KeyEvent.KEYCODE_SPACE)
+                PresentationBridge.current?.sendKeyEvent(KeyEvent.KEYCODE_SPACE, currentMeta())
             }
             KeyButton(label = "\u232B", modifier = Modifier.weight(1f)) {
                 PresentationBridge.current?.sendKeyEvent(KeyEvent.KEYCODE_DEL)
             }
-            KeyButton(label = "Enter", modifier = Modifier.weight(1.5f)) {
+            KeyButton(label = "Enter", modifier = Modifier.weight(1.3f)) {
                 PresentationBridge.current?.sendKeyEvent(KeyEvent.KEYCODE_ENTER)
             }
         }
@@ -325,16 +421,26 @@ fun KeyButton(
 ) {
     Button(
         onClick = onClick,
-        modifier = modifier.height(40.dp),
+        modifier = modifier.height(36.dp),
         contentPadding = PaddingValues(0.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = if (highlighted) MaterialTheme.colorScheme.secondary
             else MaterialTheme.colorScheme.primary
         )
     ) {
-        Text(label, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium)
     }
 }
+
+// Small helper: a plain clickable modifier without the ripple's default
+// minimum touch target expansion, so the thin edge buttons in the sketch
+// stay thin.
+@Composable
+fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier = this.clickable(
+    indication = null,
+    interactionSource = remember { MutableInteractionSource() }
+) { onClick() }
+
 
 // -------------------------------------------------------------------------
 // TV DISPLAY: hosts Aurora OS in a WebView, served through WebViewAssetLoader
