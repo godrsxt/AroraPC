@@ -385,6 +385,18 @@ const WindowManager = (() => {
     return `/Documents/AppData/${appId}${p.startsWith('/') ? p : '/' + p}`;
   }
 
+  async function ensureFolderExists(folderPath){
+    if(folderPath === '/' || folderPath === '') return;
+    const existing = await AuroraStorage.fileGet(folderPath);
+    if(existing) return;
+    const parentOfFolder = folderPath.substring(0, folderPath.lastIndexOf('/')) || '/';
+    await ensureFolderExists(parentOfFolder); // ancestors first
+    const name = folderPath.split('/').pop();
+    await AuroraStorage.fileSet({
+      path: folderPath, name, type: 'folder', parent: parentOfFolder, modified: Date.now()
+    });
+  }
+
   window.addEventListener('message', async (event) => {
     const trusted = trustedIframeSources.get(event.source);
     if(!trusted) return; // not a window we created -- ignore
@@ -397,11 +409,17 @@ const WindowManager = (() => {
       if(msg.type === 'aurora:fileGet'){
         result = await AuroraStorage.fileGet(scopedPath(trusted.appId, msg.path));
       } else if(msg.type === 'aurora:fileSet'){
-        const rec = {
-          ...msg.fileRecord,
-          path: scopedPath(trusted.appId, msg.fileRecord && msg.fileRecord.path),
-          modified: Date.now()
-        };
+        const finalPath = scopedPath(trusted.appId, msg.fileRecord && msg.fileRecord.path);
+        // Explorer/storage.js list files by matching the 'parent' field,
+        // NOT by parsing 'path' -- without this, a saved file is
+        // retrievable by fileGet(path) but invisible when browsing to
+        // its folder. Always derive it fresh rather than trust whatever
+        // (if anything) the app sent, since it doesn't know about the
+        // path-scoping remap above.
+        const parent = finalPath.substring(0, finalPath.lastIndexOf('/')) || '/';
+        await ensureFolderExists(parent);
+
+        const rec = { ...msg.fileRecord, path: finalPath, parent, modified: Date.now() };
         await AuroraStorage.fileSet(rec);
         result = { path: rec.path };
       } else {
