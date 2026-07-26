@@ -16,8 +16,12 @@
   async function initWallpaper(){
     const wallpaper = await AuroraStorage.kvGet('wallpaper', 'bloom');
     if(wallpaper === 'custom' && window.AuroraWallpaper){
-      const restored = await AuroraWallpaper.restoreIfCustom();
-      if(restored) return;
+      try{
+        const restored = await AuroraWallpaper.restoreIfCustom();
+        if(restored) return;
+      }catch(e){
+        console.error('[AuroraWallpaper] restoreIfCustom failed, falling back to gradient:', e);
+      }
     }
     if(typeof applyWallpaper === 'function') applyWallpaper(wallpaper);
   }
@@ -33,7 +37,10 @@
 
   Notifications.init();
   InputEngine.init();
-  if(window.AppManager) await AppManager.restoreInstalledApps();
+  if(window.AppManager){
+    try{ await AppManager.restoreInstalledApps(); }
+    catch(e){ console.error('[AppManager] restoreInstalledApps failed, continuing boot:', e); }
+  }
   Taskbar.init();
   Desktop.init();
   Desktops.init();
