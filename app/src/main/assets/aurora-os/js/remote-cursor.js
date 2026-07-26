@@ -1,35 +1,26 @@
-/* remote-cursor.js — visual cursor, PLUS a reliable "smart activate" that
-   covers ALL of Aurora's own top-level content -- desktop/taskbar chrome
-   AND whatever arbitrary UI a built-in app (Notepad, Calculator, Settings,
-   etc.) renders inside its own window, since those all mount real DOM
-   directly into the page (only third-party apps use an iframe).
+/* remote-cursor.js — visual cursor, plus reliable click/dblclick
+   activation for BOTH Aurora's own top-level UI and installed
+   (iframe-sandboxed) third-party apps.
 
-   Why this exists instead of relying purely on native MotionEvent
-   dispatch: there's no way, without device logs, to confirm Chromium's
-   internal touch-to-click translation is actually producing real
-   'click'/'dblclick' DOM events from synthetic touch input, vs. only
-   registering at the Android View level. Rather than keep guessing at
-   that pipeline, for anything that is definitely NOT inside a sandboxed
-   iframe and definitely NOT a native-input-requiring element, this calls
-   the DOM's own activation directly (.click(), or a manually dispatched
-   'dblclick') -- guaranteed to work regardless of that pipeline.
+   Top-level Aurora content: .click()/'dblclick' dispatched directly on
+   the element under the cursor -- safe on any element, bubbles to
+   whatever listener actually handles it.
 
-   IMPORTANT: this does NOT try to guess what counts as "clickable" via a
-   list of CSS classes/tags (that's what broke interaction inside opened
-   app windows last time -- an app's own buttons/menu items don't
-   necessarily match any hardcoded selector). Instead .click()/'dblclick'
-   is dispatched on the EXACT element under the cursor -- .click() is
-   safe to call on any element; if nothing is listening, it's a no-op,
-   and it still bubbles to whatever ancestor listener actually handles it
-   (exactly how Aurora's own delegated click handlers already work).
+   Installed apps run in a sandboxed <iframe> with no allow-same-origin,
+   so direct DOM access into it (calling .click() on something inside it)
+   is fundamentally impossible from here -- that's not a translation
+   pipeline being unreliable, it's a hard platform boundary. postMessage
+   is the one channel specifically designed to cross it: this posts an
+   "activate at (x, y)" message into the iframe's own window, and a small
+   bridge script auto-injected into every installed app at install time
+   (see MainActivity.kt's installAppFromZip/installSingleHtmlApp) does the
+   actual elementFromPoint(...).click() from *inside* that document, where
+   it has full same-document access with no cross-boundary issue at all.
 
-   This does NOT reintroduce the earlier iframe/text-selection problem:
-   - If the point is over (or inside) an <iframe>, this returns false and
-     Kotlin falls back to real native dispatch (the only way to reach
-     inside a sandboxed iframe at all).
-   - If the point is over a text input/textarea/select/contenteditable,
-     this also returns false, so native dispatch (which supports real
-     focus, caret placement, and drag-to-select) handles those. */
+   Text inputs (top-level or, via the injected bridge, inside an
+   installed app) still fall back to real native MotionEvent dispatch --
+   that's what's needed for genuine focus/caret placement/drag-selection,
+   which only ever respond to trusted input. */
 (function () {
   const el = document.getElementById('remote-cursor');
   if (!el) return;
@@ -49,17 +40,29 @@
 
   function needsNativeInput(target) {
     if (!target) return true;
-    if (target.closest('iframe')) return true;
-    if (target.closest('input, textarea, select, [contenteditable="true"]')) return true;
-    return false;
+    return !!target.closest('input, textarea, select, [contenteditable="true"]');
   }
 
-  /** Returns true if it handled the activation itself, false if Kotlin
-   *  should fall back to real native dispatch (iframe / text-like input
-   *  / nothing there at all). */
+  /** Returns true if it handled the activation itself (top-level click,
+   *  or relayed into an installed app's iframe), false if Kotlin should
+   *  fall back to real native dispatch (a text-like input, or nothing
+   *  actionable there). */
   function smartActivate(x, y, isDoubleTap) {
     const target = document.elementFromPoint(x, y);
     if (!target) return false;
+
+    const iframe = target.closest('iframe');
+    if (iframe) {
+      const rect = iframe.getBoundingClientRect();
+      iframe.contentWindow.postMessage({
+        type: 'aurora:activate',
+        x: x - rect.left,
+        y: y - rect.top,
+        dbl: !!isDoubleTap
+      }, '*');
+      return true;
+    }
+
     if (needsNativeInput(target)) return false;
 
     if (isDoubleTap) {
