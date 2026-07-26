@@ -1,6 +1,7 @@
 package com.example.localpc
 
 import android.app.Presentation
+import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -8,6 +9,7 @@ import android.graphics.BitmapFactory
 import android.hardware.display.DisplayManager
 import android.net.Uri
 import android.os.Bundle
+import android.os.IBinder
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.Base64
@@ -153,7 +155,6 @@ private fun installAppFromZip(context: Context, zipUri: Uri): String? {
 }
 
 class MainActivity : ComponentActivity() {
-    private var currentPresentation: CastPresentation? = null
 
     // Tracks the last known absolute position of a physical (USB) mouse so
     // we can turn its absolute reports into the same relative deltas the
@@ -161,6 +162,9 @@ class MainActivity : ComponentActivity() {
     private var lastPhysX = 0f
     private var lastPhysY = 0f
     private var physTracking = false
+
+    private val notificationPermissionLauncher =
+        registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -171,44 +175,20 @@ class MainActivity : ComponentActivity() {
                 })
             }
         }
-        setupSecondaryDisplayScanner()
-    }
 
-    private fun setupSecondaryDisplayScanner() {
-        val displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-        val displayListener = object : DisplayManager.DisplayListener {
-            override fun onDisplayAdded(displayId: Int) { updateTVDisplay() }
-            override fun onDisplayRemoved(displayId: Int) { updateTVDisplay() }
-            override fun onDisplayChanged(displayId: Int) { updateTVDisplay() }
-        }
-        displayManager.registerDisplayListener(displayListener, null)
-        updateTVDisplay()
-    }
-
-    private fun updateTVDisplay() {
-        val displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-        val displays = displayManager.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION)
-
-        if (displays.isEmpty()) {
-            currentPresentation?.dismiss()
-            currentPresentation = null
-            PresentationBridge.current = null
+        // The TV session now lives in AuroraDisplayService, not here -- so
+        // it keeps running even if this Activity is recreated or killed
+        // (e.g. while the system file picker is in front for Install App).
+        val serviceIntent = Intent(this, AuroraDisplayService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent)
         } else {
-            val display = displays[0]
-            if (currentPresentation?.display?.displayId != display.displayId) {
-                currentPresentation?.dismiss()
-                currentPresentation = CastPresentation(this, display)
-                currentPresentation?.show()
-                PresentationBridge.current = currentPresentation
-            }
+            startService(serviceIntent)
         }
-    }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        currentPresentation?.dismiss()
-        currentPresentation = null
-        PresentationBridge.current = null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     // ---- Physical (USB) keyboard passthrough ----
@@ -286,17 +266,21 @@ fun MainScreen(onOpenCastSettings: () -> Unit) {
         if (uri == null) return@rememberLauncherForActivityResult
         installStatus = "Installing..."
         scope.launch {
-            val manifestJson = withContext(Dispatchers.IO) { installAppFromZip(context, uri) }
-            if (manifestJson != null) {
-                val presentation = PresentationBridge.current
-                if (presentation == null) {
-                    installStatus = "Connect first (step 1), then reinstall"
+            try {
+                val manifestJson = withContext(Dispatchers.IO) { installAppFromZip(context, uri) }
+                if (manifestJson != null) {
+                    val presentation = PresentationBridge.current
+                    if (presentation == null) {
+                        installStatus = "Connect first (step 1), then reinstall"
+                    } else {
+                        presentation.installApp(manifestJson)
+                        installStatus = "Installed -- check the desktop"
+                    }
                 } else {
-                    presentation.installApp(manifestJson)
-                    installStatus = "Installed -- check the desktop"
+                    installStatus = "Install failed -- check manifest.json is at the zip root"
                 }
-            } else {
-                installStatus = "Install failed -- check manifest.json is at the zip root"
+            } catch (e: Exception) {
+                installStatus = "Install error: ${e.message ?: e.javaClass.simpleName}"
             }
         }
     }
@@ -349,7 +333,17 @@ fun MainScreen(onOpenCastSettings: () -> Unit) {
             ) { Text("Wallpaper", fontSize = 11.sp) }
 
             Button(
-                onClick = { appZipPicker.launch("application/zip") },
+                onClick = {
+                    try {
+                        // "*/*" instead of an exact "application/zip" -- several
+                        // OEM file providers don't report zip files with that
+                        // exact mime type, and GetContent throws immediately
+                        // (crashing the app) if nothing matches the filter.
+                        appZipPicker.launch("*/*")
+                    } catch (e: Exception) {
+                        installStatus = "No file picker available: ${e.message ?: e.javaClass.simpleName}"
+                    }
+                },
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
             ) { Text("Install App", fontSize = 11.sp) }
         }
@@ -638,6 +632,89 @@ fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier = this.clickable(
 // A custom on-page cursor (js/remote-cursor.js) renders where the pointer
 // currently is, since there's no physical pointer device on this display.
 // -------------------------------------------------------------------------
+// -------------------------------------------------------------------------
+// Foreground service that owns the external display session. Moved out of
+// MainActivity so the TV output (Aurora OS, cursor, everything) keeps
+// running even if the Activity is recreated or killed by the OS -- e.g.
+// while the system file picker is in front for Install App, or if the
+// person switches to another app for a while.
+// -------------------------------------------------------------------------
+class AuroraDisplayService : Service() {
+
+    private var currentPresentation: CastPresentation? = null
+    private var displayListener: DisplayManager.DisplayListener? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        startForeground(NOTIFICATION_ID, buildNotification())
+        setupSecondaryDisplayScanner()
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun setupSecondaryDisplayScanner() {
+        val displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+        val listener = object : DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) { updateTVDisplay() }
+            override fun onDisplayRemoved(displayId: Int) { updateTVDisplay() }
+            override fun onDisplayChanged(displayId: Int) { updateTVDisplay() }
+        }
+        displayListener = listener
+        displayManager.registerDisplayListener(listener, null)
+        updateTVDisplay()
+    }
+
+    private fun updateTVDisplay() {
+        val displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+        val displays = displayManager.getDisplays(DisplayManager.DISPLAY_CATEGORY_PRESENTATION)
+
+        if (displays.isEmpty()) {
+            currentPresentation?.dismiss()
+            currentPresentation = null
+            PresentationBridge.current = null
+        } else {
+            val display = displays[0]
+            if (currentPresentation?.display?.displayId != display.displayId) {
+                currentPresentation?.dismiss()
+                currentPresentation = CastPresentation(this, display)
+                currentPresentation?.show()
+                PresentationBridge.current = currentPresentation
+            }
+        }
+    }
+
+    private fun buildNotification(): android.app.Notification {
+        val channelId = "aurora_display_channel"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = android.app.NotificationChannel(
+                channelId, "Aurora OS Display", android.app.NotificationManager.IMPORTANCE_LOW
+            )
+            getSystemService(android.app.NotificationManager::class.java).createNotificationChannel(channel)
+        }
+        return androidx.core.app.NotificationCompat.Builder(this, channelId)
+            .setContentTitle("Aurora OS running")
+            .setContentText("Stays connected in the background")
+            .setSmallIcon(android.R.drawable.ic_menu_share)
+            .setOngoing(true)
+            .build()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        val displayManager = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+        displayListener?.let { displayManager.unregisterDisplayListener(it) }
+        currentPresentation?.dismiss()
+        currentPresentation = null
+        PresentationBridge.current = null
+    }
+
+    companion object {
+        private const val NOTIFICATION_ID = 2001
+    }
+}
+
+
+
 class CastPresentation(context: Context, display: Display) : Presentation(context, display) {
 
     private lateinit var webView: WebView
@@ -657,7 +734,12 @@ class CastPresentation(context: Context, display: Display) : Presentation(contex
     // JS has to be converted to CSS px, or it drifts further off-screen
     // the closer it gets to the right/bottom edge -- which is exactly the
     // "cursor exits bottom/right" symptom.
-    private val cssScale: Float by lazy { 1f / context.resources.displayMetrics.density }
+    // Measured (not assumed) CSS-px-per-device-px scale, per axis. Filled
+    // in by remeasureCssScale() once the page has actually loaded -- an
+    // assumed 1/density guess doesn't always match WebView's real internal
+    // scale, which is what made the cursor fall short of the true edges.
+    private var cssWidthScale = 1f
+    private var cssHeightScale = 1f
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -691,6 +773,11 @@ class CastPresentation(context: Context, display: Display) : Presentation(contex
                     view: WebView,
                     request: WebResourceRequest
                 ): WebResourceResponse? = assetLoader.shouldInterceptRequest(request.url)
+
+                override fun onPageFinished(view: WebView, url: String) {
+                    super.onPageFinished(view, url)
+                    remeasureCssScale()
+                }
             }
         }
         webView.loadUrl("https://appassets.androidplatform.net/assets/aurora-os/index.html")
@@ -746,7 +833,10 @@ class CastPresentation(context: Context, display: Display) : Presentation(contex
         }
         aspectContainer.layoutParams = params
 
-        // Cursor bounds shrink/grow with the box -- keep it on-screen.
+        // Cursor bounds shrink/grow with the box -- keep it on-screen, and
+        // re-measure since the CSS-px-per-device-px ratio can shift with
+        // the new box size.
+        webView.postDelayed({ remeasureCssScale() }, 80)
         webView.post {
             cursorX = cursorX.coerceIn(0f, webView.width.toFloat())
             cursorY = cursorY.coerceIn(0f, webView.height.toFloat())
@@ -789,13 +879,32 @@ class CastPresentation(context: Context, display: Display) : Presentation(contex
         )
     }
 
+    /** Measures the page's actual CSS viewport against the WebView's real
+     *  device-pixel size, so the visual cursor's coordinate conversion is
+     *  correct regardless of WebView's internal zoom behavior -- fixes the
+     *  cursor falling short of the real right/bottom edges. */
+    private fun remeasureCssScale() {
+        webView.evaluateJavascript("window.innerWidth") { widthStr ->
+            webView.evaluateJavascript("window.innerHeight") { heightStr ->
+                val cssW = widthStr?.toFloatOrNull()
+                val cssH = heightStr?.toFloatOrNull()
+                val devW = webView.width.toFloat()
+                val devH = webView.height.toFloat()
+                if (cssW != null && cssH != null && cssW > 0 && cssH > 0 && devW > 0 && devH > 0) {
+                    cssWidthScale = cssW / devW
+                    cssHeightScale = cssH / devH
+                }
+            }
+        }
+    }
+
     private fun updateVisualCursor() {
         // cursorX/cursorY are in Android device pixels (correct for the real
         // dispatched MotionEvents above); the visual cursor div is positioned
-        // in CSS pixels, so it needs the density conversion or it overshoots
-        // more and more the further it gets from the top-left corner.
-        val cssX = cursorX * cssScale
-        val cssY = cursorY * cssScale
+        // in CSS pixels, so it needs the measured conversion above, or it
+        // falls short of (or overshoots) the true edges.
+        val cssX = cursorX * cssWidthScale
+        val cssY = cursorY * cssHeightScale
         webView.evaluateJavascript(
             "window.__auroraCursor && window.__auroraCursor.move(${cssX}, ${cssY})", null
         )
