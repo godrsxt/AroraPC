@@ -911,59 +911,86 @@ class CastPresentation(context: Context, display: Display) : Presentation(contex
         )
     }
 
-    /** Moves the cursor by a relative delta. `dragging=true` sends ACTION_MOVE
-     *  with the left button held (for window-drag/selection); otherwise it's
-     *  a plain hover move. */
+    /** Moves the cursor by a relative delta. `dragging=true` reports the
+     *  move to JS as a held-button drag (for window-drag/selection);
+     *  otherwise it's a plain native hover move. */
     fun moveCursorBy(dx: Float, dy: Float, dragging: Boolean) {
         cursorX = (cursorX + dx).coerceIn(0f, webView.width.toFloat())
         cursorY = (cursorY + dy).coerceIn(0f, webView.height.toFloat())
+        val cssX = cursorX * cssWidthScale
+        val cssY = cursorY * cssHeightScale
         webView.post {
-            val ev = if (dragging) {
-                buildMouseEvent(MotionEvent.ACTION_MOVE, MotionEvent.BUTTON_PRIMARY, leftDownTime)
+            if (dragging) {
+                webView.evaluateJavascript(
+                    "window.__auroraCursor && window.__auroraCursor.dragMove(${cssX}, ${cssY})", null
+                )
             } else {
-                buildMouseEvent(MotionEvent.ACTION_HOVER_MOVE, 0, SystemClock.uptimeMillis())
+                webView.dispatchGenericMotionEvent(
+                    buildMouseEvent(MotionEvent.ACTION_HOVER_MOVE, 0, SystemClock.uptimeMillis())
+                )
             }
-            if (dragging) webView.dispatchTouchEvent(ev) else webView.dispatchGenericMotionEvent(ev)
             updateVisualCursor()
         }
     }
 
     fun pressLeft() {
-        leftDownTime = SystemClock.uptimeMillis()
+        val cssX = cursorX * cssWidthScale
+        val cssY = cursorY * cssHeightScale
         webView.post {
-            webView.dispatchTouchEvent(buildMouseEvent(MotionEvent.ACTION_DOWN, MotionEvent.BUTTON_PRIMARY, leftDownTime))
+            webView.evaluateJavascript(
+                "window.__auroraCursor && window.__auroraCursor.dragStart(${cssX}, ${cssY})", null
+            )
         }
     }
 
     fun releaseLeft() {
+        val cssX = cursorX * cssWidthScale
+        val cssY = cursorY * cssHeightScale
         webView.post {
-            webView.dispatchTouchEvent(buildMouseEvent(MotionEvent.ACTION_UP, 0, leftDownTime))
-            webView.evaluateJavascript("window.__auroraCursor && window.__auroraCursor.pulse()", null)
+            webView.evaluateJavascript(
+                "window.__auroraCursor && window.__auroraCursor.dragEnd(${cssX}, ${cssY})", null
+            )
         }
     }
 
     fun tapClick() {
-        pressLeft()
-        webView.postDelayed({ releaseLeft() }, 50)
+        val cssX = cursorX * cssWidthScale
+        val cssY = cursorY * cssHeightScale
+        webView.post {
+            webView.evaluateJavascript(
+                "window.__auroraCursor && window.__auroraCursor.clickAt(${cssX}, ${cssY}, 0)", null
+            )
+        }
     }
 
     fun pressRight() {
-        rightDownTime = SystemClock.uptimeMillis()
+        val cssX = cursorX * cssWidthScale
+        val cssY = cursorY * cssHeightScale
         webView.post {
-            webView.dispatchTouchEvent(buildMouseEvent(MotionEvent.ACTION_DOWN, MotionEvent.BUTTON_SECONDARY, rightDownTime))
+            webView.evaluateJavascript(
+                "window.__auroraCursor && window.__auroraCursor.dragStart(${cssX}, ${cssY})", null
+            )
         }
     }
 
     fun releaseRight() {
+        val cssX = cursorX * cssWidthScale
+        val cssY = cursorY * cssHeightScale
         webView.post {
-            webView.dispatchTouchEvent(buildMouseEvent(MotionEvent.ACTION_UP, 0, rightDownTime))
-            webView.evaluateJavascript("window.__auroraCursor && window.__auroraCursor.pulse()", null)
+            webView.evaluateJavascript(
+                "window.__auroraCursor && window.__auroraCursor.dragEnd(${cssX}, ${cssY})", null
+            )
         }
     }
 
     fun tapRightClick() {
-        pressRight()
-        webView.postDelayed({ releaseRight() }, 50)
+        val cssX = cursorX * cssWidthScale
+        val cssY = cursorY * cssHeightScale
+        webView.post {
+            webView.evaluateJavascript(
+                "window.__auroraCursor && window.__auroraCursor.clickAt(${cssX}, ${cssY}, 2)", null
+            )
+        }
     }
 
     // ---- Keyboard bridge ----
