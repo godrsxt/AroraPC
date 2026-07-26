@@ -1,25 +1,24 @@
-/* remote-cursor.js — PURELY VISUAL. Draws where the cursor is; does not
-   dispatch any input itself.
+/* remote-cursor.js — visual cursor, PLUS a reliable "smart activate" for
+   Aurora's own top-level UI (icons, buttons, taskbar items).
 
-   Why: this used to also dispatch synthetic click/drag events in JS.
-   That reliably worked for Aurora's own top-level UI, but two things
-   about synthetic (JS dispatchEvent) input are platform limitations, not
-   bugs that can be worked around in JS:
-     1. It cannot cross an iframe boundary -- events dispatched on/near
-        an <iframe> element in the parent document never reach the
-        iframe's own internal document, so installed (sandboxed-iframe)
-        apps never received any input at all.
-     2. Browsers only let *trusted* (real) input trigger native behaviors
-        like text-field focus, caret placement, and drag-to-select text.
-        Synthetic events fire JS listeners but never those native
-        behaviors.
+   Why this exists instead of relying purely on native MotionEvent
+   dispatch: we can no longer tell, without device logs, whether
+   Chromium's internal touch-to-click translation is actually producing
+   real 'click'/'dblclick' DOM events from our synthetic touch input, or
+   only registering at the Android View level (which is all "consumed"
+   in the debug log actually proves). Rather than keep guessing at that
+   pipeline, for anything that is definitely NOT inside a sandboxed
+   iframe and definitely NOT a text input, we skip the translation
+   uncertainty entirely and call the DOM's own reliable activation
+   directly (.click(), or a manually dispatched 'dblclick').
 
-   Real input -- genuine Android MotionEvent/KeyEvent objects dispatched
-   from Kotlin, exactly what a real touchscreen or USB mouse produces --
-   doesn't have either limitation, and is also the one mechanism that
-   generalizes cleanly to a future direct-touch "Android mode" (no
-   external display) alongside this "Cast mode". So clicks/drags are
-   dispatched natively again; this file only ever draws the cursor. */
+   This does NOT reintroduce the earlier iframe/text-selection problem:
+   - If the point is over an <iframe>, this returns false and Kotlin
+     falls back to real native dispatch (the only way to reach inside a
+     sandboxed iframe).
+   - If the point is over a text input/textarea/contenteditable, this
+     also returns false, so native dispatch (which supports real focus,
+     caret placement, and drag-to-select) still handles those. */
 (function () {
   const el = document.getElementById('remote-cursor');
   if (!el) return;
@@ -37,8 +36,40 @@
     setTimeout(() => el.classList.remove('clicking'), 120);
   }
 
+  /** Returns true if it handled the activation itself (Aurora's own UI),
+   *  false if Kotlin should fall back to native dispatch (iframe / text
+   *  input / nothing actionable there). */
+  function smartActivate(x, y, isDoubleTap) {
+    const el = document.elementFromPoint(x, y);
+    if (!el) return false;
+
+    if (el.tagName === 'IFRAME') return false; // installed app -- needs native
+    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable) {
+      return false; // needs native for real focus/caret/selection
+    }
+
+    if (isDoubleTap) {
+      const icon = el.closest('.desktop-icon');
+      if (icon) {
+        icon.dispatchEvent(new MouseEvent('dblclick', {
+          bubbles: true, cancelable: true, clientX: x, clientY: y, view: window
+        }));
+        return true;
+      }
+    }
+
+    const clickable = el.closest(
+      'button, .taskbar-btn, .start-app, .desktop-icon, [role="button"], a, .win-ctrl, .icon-btn'
+    );
+    if (clickable) {
+      clickable.click();
+      return true;
+    }
+    return false;
+  }
+
   // Exposed for Kotlin to call via evaluateJavascript.
-  window.__auroraCursor = { move, pulse };
+  window.__auroraCursor = { move, pulse, smartActivate };
 
   move(window.innerWidth / 2, window.innerHeight / 2);
 })();
