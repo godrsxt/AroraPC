@@ -30,16 +30,25 @@ const Desktop = (() => {
       el.classList.add('selected');
     });
     el.addEventListener('dblclick', () => WindowManager.open(id));
+    // Right-click (or the phone's Right Click button) removes the icon
+    // from the desktop only -- the app stays reachable from Start menu >
+    // All apps, and can be put back with AppManager.showOnDesktop(id).
+    el.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if(window.AppManager) AppManager.hideFromDesktop(id);
+    });
     grid.appendChild(el);
   }
 
   function renderIcons(){
     const grid = document.getElementById('desktop-icons');
     grid.innerHTML = '';
-    DEFAULT_ICON_APPS.forEach(id => addIconTo(grid, id));
+    const isHidden = (id) => window.AppManager && AppManager.isHiddenFromDesktop(id);
+    DEFAULT_ICON_APPS.forEach(id => { if(!isHidden(id)) addIconTo(grid, id); });
     // Third-party apps installed via AppManager.install() -- appended
     // after the built-in set, same icon markup/behavior.
-    if(window.AppManager) AppManager.installedIds().forEach(id => addIconTo(grid, id));
+    if(window.AppManager) AppManager.installedIds().forEach(id => { if(!isHidden(id)) addIconTo(grid, id); });
   }
 
   function renderClockWidget(){
