@@ -64,6 +64,13 @@ object PresentationBridge {
     var current: CastPresentation? = null
 }
 
+/** Surfaces Kotlin-side dispatch results on the phone screen, since the
+ *  device has no ADB and there's otherwise no way to see what's actually
+ *  happening on the TV side. */
+object DebugBridge {
+    val lastMessage = androidx.compose.runtime.mutableStateOf("")
+}
+
 // Global on/off switch for forwarding a USB-connected keyboard/mouse to the
 // TV instead of letting it control the phone UI. Toggled from MainScreen.
 object RemoteInputSettings {
@@ -509,6 +516,16 @@ fun MainScreen(onOpenCastSettings: () -> Unit) {
             Text(it, fontSize = 11.sp, color = Color.Gray, modifier = Modifier.padding(top = 2.dp))
         }
 
+        val debugMsg by DebugBridge.lastMessage
+        if (debugMsg.isNotEmpty()) {
+            Text(
+                "debug: $debugMsg",
+                fontSize = 10.sp,
+                color = Color(0xFFFFA726),
+                modifier = Modifier.padding(top = 2.dp)
+            )
+        }
+
         Spacer(Modifier.height(6.dp))
 
         Row(
@@ -834,6 +851,7 @@ class AuroraDisplayService : Service() {
             if (currentPresentation?.display?.displayId != display.displayId) {
                 currentPresentation?.dismiss()
                 currentPresentation = CastPresentation(this, display)
+                currentPresentation?.onDebug = { msg -> DebugBridge.lastMessage.value = msg }
                 currentPresentation?.show()
                 PresentationBridge.current = currentPresentation
             }
@@ -1075,6 +1093,10 @@ class CastPresentation(context: Context, display: Display) : Presentation(contex
      *  This is genuine Android input dispatch -- it crosses into sandboxed
      *  iframes correctly (installed apps) and triggers native text-field
      *  behaviors, unlike a JS-dispatched synthetic event. */
+    /** Set by MainActivity so dispatch results can be shown on the phone
+     *  screen -- without this we're debugging blind with no device logs. */
+    var onDebug: ((String) -> Unit)? = null
+
     fun moveCursorBy(dx: Float, dy: Float, dragging: Boolean) {
         cursorX = (cursorX + dx).coerceIn(0f, webView.width.toFloat())
         cursorY = (cursorY + dy).coerceIn(0f, webView.height.toFloat())
@@ -1095,20 +1117,17 @@ class CastPresentation(context: Context, display: Display) : Presentation(contex
     fun pressLeft() {
         leftDownTime = SystemClock.uptimeMillis()
         webView.post {
-            // A real mouse always exits hover state right before a press --
-            // Chromium's internal pointer state machine expects that
-            // transition to cleanly switch from hovering to pressed.
-            webView.dispatchGenericMotionEvent(buildMouseEvent(MotionEvent.ACTION_HOVER_EXIT, 0, leftDownTime))
-            webView.dispatchTouchEvent(buildMouseEvent(MotionEvent.ACTION_DOWN, MotionEvent.BUTTON_PRIMARY, leftDownTime))
+            val consumed = webView.dispatchTouchEvent(
+                buildMouseEvent(MotionEvent.ACTION_DOWN, MotionEvent.BUTTON_PRIMARY, leftDownTime)
+            )
+            onDebug?.invoke("DOWN consumed=$consumed at (${cursorX.toInt()},${cursorY.toInt()})")
         }
     }
 
     fun releaseLeft() {
         webView.post {
-            webView.dispatchTouchEvent(buildMouseEvent(MotionEvent.ACTION_UP, 0, leftDownTime))
-            val resumeTime = SystemClock.uptimeMillis()
-            webView.dispatchGenericMotionEvent(buildMouseEvent(MotionEvent.ACTION_HOVER_ENTER, 0, resumeTime))
-            webView.dispatchGenericMotionEvent(buildMouseEvent(MotionEvent.ACTION_HOVER_MOVE, 0, resumeTime))
+            val consumed = webView.dispatchTouchEvent(buildMouseEvent(MotionEvent.ACTION_UP, 0, leftDownTime))
+            onDebug?.invoke("UP consumed=$consumed")
             webView.evaluateJavascript("window.__auroraCursor && window.__auroraCursor.pulse()", null)
         }
     }
@@ -1124,17 +1143,17 @@ class CastPresentation(context: Context, display: Display) : Presentation(contex
     fun pressRight() {
         rightDownTime = SystemClock.uptimeMillis()
         webView.post {
-            webView.dispatchGenericMotionEvent(buildMouseEvent(MotionEvent.ACTION_HOVER_EXIT, 0, rightDownTime))
-            webView.dispatchTouchEvent(buildMouseEvent(MotionEvent.ACTION_DOWN, MotionEvent.BUTTON_SECONDARY, rightDownTime))
+            val consumed = webView.dispatchTouchEvent(
+                buildMouseEvent(MotionEvent.ACTION_DOWN, MotionEvent.BUTTON_SECONDARY, rightDownTime)
+            )
+            onDebug?.invoke("R-DOWN consumed=$consumed")
         }
     }
 
     fun releaseRight() {
         webView.post {
-            webView.dispatchTouchEvent(buildMouseEvent(MotionEvent.ACTION_UP, 0, rightDownTime))
-            val resumeTime = SystemClock.uptimeMillis()
-            webView.dispatchGenericMotionEvent(buildMouseEvent(MotionEvent.ACTION_HOVER_ENTER, 0, resumeTime))
-            webView.dispatchGenericMotionEvent(buildMouseEvent(MotionEvent.ACTION_HOVER_MOVE, 0, resumeTime))
+            val consumed = webView.dispatchTouchEvent(buildMouseEvent(MotionEvent.ACTION_UP, 0, rightDownTime))
+            onDebug?.invoke("R-UP consumed=$consumed")
             webView.evaluateJavascript("window.__auroraCursor && window.__auroraCursor.pulse()", null)
         }
     }
