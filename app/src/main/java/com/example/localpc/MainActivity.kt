@@ -108,6 +108,44 @@ private fun uriToWallpaperDataUrl(context: Context, uri: Uri): String? {
 }
 
 /**
+ * Auto-injected into every installed app's index.html (both install
+ * paths) right before </body>. Lets the OS side reach inside this
+ * sandboxed iframe via postMessage -- direct DOM access from the parent
+ * is impossible by design (no allow-same-origin), so this runs the
+ * actual activation from *inside* the app's own document instead, where
+ * it has full same-document access.
+ */
+private const val AURORA_APP_BRIDGE_SCRIPT = """
+<script>
+window.addEventListener('message', function(e){
+  var msg = e.data || {};
+  if (msg.type !== 'aurora:activate') return;
+  var el = document.elementFromPoint(msg.x, msg.y);
+  if (!el) return;
+  if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable) {
+    el.focus();
+    return;
+  }
+  if (msg.dbl) {
+    el.dispatchEvent(new MouseEvent('dblclick', { bubbles:true, cancelable:true, clientX:msg.x, clientY:msg.y, view:window }));
+  } else {
+    el.click();
+  }
+});
+</script>
+"""
+
+/** Inserts the bridge script before </body>, or appends it if the file
+ *  has no </body> tag at all. Safe to call on any HTML text. */
+private fun injectAppBridge(html: String): String {
+    return if (html.contains("</body>", ignoreCase = true)) {
+        html.replaceFirst(Regex("(?i)</body>"), "$AURORA_APP_BRIDGE_SCRIPT</body>")
+    } else {
+        html + AURORA_APP_BRIDGE_SCRIPT
+    }
+}
+
+/**
  * Extracts a third-party app zip (manifest.json/index.html/etc. at the zip
  * root -- no wrapping folder) into context.filesDir/apps/<manifest.id>/,
  * replacing any previous install of the same app id. Returns the raw
@@ -147,6 +185,12 @@ private fun installAppFromZip(context: Context, zipUri: Uri): String? {
         if (!manifestFile.exists()) return null
         val manifestJson = manifestFile.readText()
         val id = JSONObject(manifestJson).getString("id")
+
+        // Inject the bridge before moving into place.
+        val indexFile = File(tempDir, "index.html")
+        if (indexFile.exists()) {
+            indexFile.writeText(injectAppBridge(indexFile.readText()))
+        }
 
         val finalDir = File(File(context.filesDir, "apps"), id)
         finalDir.deleteRecursively()
@@ -189,7 +233,7 @@ private fun installSingleHtmlApp(
         val htmlText = context.contentResolver.openInputStream(htmlUri)?.use {
             it.bufferedReader().readText()
         } ?: return null
-        File(appDir, "index.html").writeText(htmlText)
+        File(appDir, "index.html").writeText(injectAppBridge(htmlText))
 
         var iconFileName: String? = null
         if (iconUri != null) {
