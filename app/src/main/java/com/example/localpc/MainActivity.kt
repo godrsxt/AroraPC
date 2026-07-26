@@ -1132,12 +1132,52 @@ class CastPresentation(context: Context, display: Display) : Presentation(contex
         }
     }
 
-    /** A real click is just a quick press+release -- the browser's own
-     *  double-click detection (same timing window as any desktop OS)
-     *  handles opening icons on a second tap; no JS click-synthesis needed. */
+    private var lastTapTime = 0L
+    private var lastTapX = 0f
+    private var lastTapY = 0f
+
+    /** A single tap is a quick press+release. Two taps landing within a
+     *  generous window (lenient, since each tap first passes through the
+     *  phone's own gesture detection before it ever reaches here -- that
+     *  adds variable latency a real mouse never has) are treated as a
+     *  double-tap: we then dispatch a FRESH, tightly-timed down/up pair
+     *  right after the first, so Chromium's native double-click detector
+     *  -- which judges purely by the dispatched events' own timestamps --
+     *  reliably recognizes it as a double-click regardless of how far
+     *  apart the person's two actual taps were. */
     fun tapClick() {
-        pressLeft()
-        webView.postDelayed({ releaseLeft() }, 60)
+        val now = SystemClock.uptimeMillis()
+        val isDoubleTap = (now - lastTapTime) < 700 &&
+            kotlin.math.abs(cursorX - lastTapX) < 24 &&
+            kotlin.math.abs(cursorY - lastTapY) < 24
+
+        if (isDoubleTap) {
+            lastTapTime = 0L // don't chain a third tap into another double-click
+            onDebug?.invoke("double-tap detected -> dispatching dblclick")
+            dispatchTightDoubleClick()
+        } else {
+            lastTapTime = now
+            lastTapX = cursorX
+            lastTapY = cursorY
+            pressLeft()
+            webView.postDelayed({ releaseLeft() }, 60)
+        }
+    }
+
+    private fun dispatchTightDoubleClick() {
+        webView.post {
+            val t0 = SystemClock.uptimeMillis()
+            val down1 = webView.dispatchTouchEvent(buildMouseEvent(MotionEvent.ACTION_DOWN, MotionEvent.BUTTON_PRIMARY, t0))
+            val up1 = webView.dispatchTouchEvent(buildMouseEvent(MotionEvent.ACTION_UP, 0, t0))
+            onDebug?.invoke("dblclick pair1 down=$down1 up=$up1")
+        }
+        webView.postDelayed({
+            val t1 = SystemClock.uptimeMillis()
+            val down2 = webView.dispatchTouchEvent(buildMouseEvent(MotionEvent.ACTION_DOWN, MotionEvent.BUTTON_PRIMARY, t1))
+            val up2 = webView.dispatchTouchEvent(buildMouseEvent(MotionEvent.ACTION_UP, 0, t1))
+            onDebug?.invoke("dblclick pair2 down=$down2 up=$up2")
+            webView.evaluateJavascript("window.__auroraCursor && window.__auroraCursor.pulse()", null)
+        }, 40)
     }
 
     fun pressRight() {
