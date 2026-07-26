@@ -671,7 +671,7 @@ canvas{ display:block; }
 
 /* --- Remote cursor (added for phone-controlled input) --- */
 #remote-cursor {
-  position: absolute;
+  position: fixed;
   top: 0;
   left: 0;
   width: 22px;
