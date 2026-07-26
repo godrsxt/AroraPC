@@ -155,6 +155,71 @@ private fun installAppFromZip(context: Context, zipUri: Uri): String? {
     }
 }
 
+/**
+ * Simple path for the common case: one self-contained HTML file (its own
+ * inline <style>/<script> is fine -- it doesn't need separate .css/.js
+ * files) plus a name and an optional icon photo. No zip, no manifest.json
+ * to hand-write. Builds context.filesDir/apps/<slug>/index.html (+
+ * icon.jpg if provided) and returns the generated manifest JSON, ready for
+ * CastPresentation.installApp(). Runs blocking I/O -- call from Dispatchers.IO.
+ */
+private fun installSingleHtmlApp(
+    context: Context,
+    htmlUri: Uri,
+    appName: String,
+    iconUri: Uri?
+): String? {
+    return try {
+        val id = appName.lowercase()
+            .replace(Regex("[^a-z0-9]+"), "-")
+            .trim('-')
+            .ifBlank { "app-${System.currentTimeMillis()}" }
+
+        val appDir = File(File(context.filesDir, "apps"), id)
+        appDir.deleteRecursively()
+        appDir.mkdirs()
+
+        val htmlText = context.contentResolver.openInputStream(htmlUri)?.use {
+            it.bufferedReader().readText()
+        } ?: return null
+        File(appDir, "index.html").writeText(htmlText)
+
+        var iconFileName: String? = null
+        if (iconUri != null) {
+            val input = context.contentResolver.openInputStream(iconUri)
+            val bitmap = input?.use { BitmapFactory.decodeStream(it) }
+            if (bitmap != null) {
+                val size = 128
+                val scaled = Bitmap.createScaledBitmap(bitmap, size, size, true)
+                FileOutputStream(File(appDir, "icon.jpg")).use { out ->
+                    scaled.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                }
+                iconFileName = "icon.jpg"
+            }
+        }
+
+        val colors = listOf(
+            "linear-gradient(135deg,#6d8bff,#b18cff)",
+            "linear-gradient(135deg,#33C6C1,#2E7CF6)",
+            "linear-gradient(135deg,#ff8a65,#ff5252)",
+            "linear-gradient(135deg,#66bb6a,#26a69a)",
+            "linear-gradient(135deg,#ba68c8,#7e57c2)"
+        )
+        val color = colors[Math.abs(id.hashCode()) % colors.size]
+
+        val manifest = JSONObject().apply {
+            put("id", id)
+            put("title", appName)
+            put("version", "1.0.0")
+            put("color", color)
+            if (iconFileName != null) put("icon", iconFileName)
+        }
+        manifest.toString()
+    } catch (e: Exception) {
+        null
+    }
+}
+
 class MainActivity : ComponentActivity() {
 
     // Tracks the last known absolute position of a physical (USB) mouse so
@@ -286,6 +351,86 @@ fun MainScreen(onOpenCastSettings: () -> Unit) {
         }
     }
 
+    // --- Quick App: one HTML file + a name + an optional icon, no zip/manifest needed ---
+    var pendingHtmlUri by remember { mutableStateOf<Uri?>(null) }
+    var pendingIconUri by remember { mutableStateOf<Uri?>(null) }
+    var showQuickAppDialog by remember { mutableStateOf(false) }
+    var quickAppName by remember { mutableStateOf("") }
+
+    val quickHtmlPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        pendingHtmlUri = uri
+        pendingIconUri = null
+        quickAppName = ""
+        showQuickAppDialog = true
+    }
+    val quickIconPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? -> if (uri != null) pendingIconUri = uri }
+
+    if (showQuickAppDialog) {
+        AlertDialog(
+            onDismissRequest = { showQuickAppDialog = false },
+            title = { Text("Name this app") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = quickAppName,
+                        onValueChange = { quickAppName = it },
+                        label = { Text("App name") },
+                        singleLine = true
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Button(onClick = {
+                        quickIconPicker.launch(
+                            androidx.activity.result.PickVisualMediaRequest(
+                                ActivityResultContracts.PickVisualMedia.ImageOnly
+                            )
+                        )
+                    }) {
+                        Text(if (pendingIconUri != null) "Icon picked" else "Pick icon (optional)", fontSize = 12.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val htmlUri = pendingHtmlUri
+                    val name = quickAppName.trim()
+                    showQuickAppDialog = false
+                    if (htmlUri != null && name.isNotEmpty()) {
+                        installStatus = "Installing..."
+                        val iconUri = pendingIconUri
+                        scope.launch {
+                            try {
+                                val manifestJson = withContext(Dispatchers.IO) {
+                                    installSingleHtmlApp(context, htmlUri, name, iconUri)
+                                }
+                                if (manifestJson != null) {
+                                    val presentation = PresentationBridge.current
+                                    if (presentation == null) {
+                                        installStatus = "Connect first (step 1), then reinstall"
+                                    } else {
+                                        presentation.installApp(manifestJson)
+                                        installStatus = "Installed -- check the desktop"
+                                    }
+                                } else {
+                                    installStatus = "Install failed"
+                                }
+                            } catch (e: Exception) {
+                                installStatus = "Install error: ${e.message ?: e.javaClass.simpleName}"
+                            }
+                        }
+                    }
+                }) { Text("Install") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showQuickAppDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
     val ratioOptions = listOf(
         "16:9" to (16f to 9f),
         "4:3" to (4f to 3f),
@@ -347,6 +492,17 @@ fun MainScreen(onOpenCastSettings: () -> Unit) {
                 },
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
             ) { Text("Install App", fontSize = 11.sp) }
+
+            Button(
+                onClick = {
+                    try {
+                        quickHtmlPicker.launch("*/*")
+                    } catch (e: Exception) {
+                        installStatus = "No file picker available: ${e.message ?: e.javaClass.simpleName}"
+                    }
+                },
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+            ) { Text("Quick App", fontSize = 11.sp) }
         }
 
         installStatus?.let {
