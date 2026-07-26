@@ -1136,31 +1136,36 @@ class CastPresentation(context: Context, display: Display) : Presentation(contex
     private var lastTapX = 0f
     private var lastTapY = 0f
 
-    /** A single tap is a quick press+release. Two taps landing within a
-     *  generous window (lenient, since each tap first passes through the
-     *  phone's own gesture detection before it ever reaches here -- that
-     *  adds variable latency a real mouse never has) are treated as a
-     *  double-tap: we then dispatch a FRESH, tightly-timed down/up pair
-     *  right after the first, so Chromium's native double-click detector
-     *  -- which judges purely by the dispatched events' own timestamps --
-     *  reliably recognizes it as a double-click regardless of how far
-     *  apart the person's two actual taps were. */
+    /** Tries the JS-reliable path first (Aurora's own icons/buttons/taskbar
+     *  -- guaranteed to work since it's a direct DOM .click()/dblclick, no
+     *  translation-pipeline uncertainty). If JS declines (the point is over
+     *  an iframe or a text input), falls back to real native MotionEvent
+     *  dispatch, which is required for those two cases specifically. */
     fun tapClick() {
         val now = SystemClock.uptimeMillis()
         val isDoubleTap = (now - lastTapTime) < 700 &&
             kotlin.math.abs(cursorX - lastTapX) < 24 &&
             kotlin.math.abs(cursorY - lastTapY) < 24
 
-        if (isDoubleTap) {
-            lastTapTime = 0L // don't chain a third tap into another double-click
-            onDebug?.invoke("double-tap detected -> dispatching dblclick")
-            dispatchTightDoubleClick()
-        } else {
-            lastTapTime = now
-            lastTapX = cursorX
-            lastTapY = cursorY
-            pressLeft()
-            webView.postDelayed({ releaseLeft() }, 60)
+        if (isDoubleTap) lastTapTime = 0L
+        else { lastTapTime = now; lastTapX = cursorX; lastTapY = cursorY }
+
+        val cssX = cursorX * cssWidthScale
+        val cssY = cursorY * cssHeightScale
+        webView.post {
+            webView.evaluateJavascript(
+                "window.__auroraCursor && window.__auroraCursor.smartActivate(${cssX}, ${cssY}, ${isDoubleTap})"
+            ) { result ->
+                onDebug?.invoke("smartActivate=$result double=$isDoubleTap")
+                if (result == "true") {
+                    webView.evaluateJavascript("window.__auroraCursor && window.__auroraCursor.pulse()", null)
+                } else if (isDoubleTap) {
+                    dispatchTightDoubleClick()
+                } else {
+                    pressLeft()
+                    webView.postDelayed({ releaseLeft() }, 60)
+                }
+            }
         }
     }
 
@@ -1169,13 +1174,13 @@ class CastPresentation(context: Context, display: Display) : Presentation(contex
             val t0 = SystemClock.uptimeMillis()
             val down1 = webView.dispatchTouchEvent(buildMouseEvent(MotionEvent.ACTION_DOWN, MotionEvent.BUTTON_PRIMARY, t0))
             val up1 = webView.dispatchTouchEvent(buildMouseEvent(MotionEvent.ACTION_UP, 0, t0))
-            onDebug?.invoke("dblclick pair1 down=$down1 up=$up1")
+            onDebug?.invoke("native dblclick pair1 down=$down1 up=$up1")
         }
         webView.postDelayed({
             val t1 = SystemClock.uptimeMillis()
             val down2 = webView.dispatchTouchEvent(buildMouseEvent(MotionEvent.ACTION_DOWN, MotionEvent.BUTTON_PRIMARY, t1))
             val up2 = webView.dispatchTouchEvent(buildMouseEvent(MotionEvent.ACTION_UP, 0, t1))
-            onDebug?.invoke("dblclick pair2 down=$down2 up=$up2")
+            onDebug?.invoke("native dblclick pair2 down=$down2 up=$up2")
             webView.evaluateJavascript("window.__auroraCursor && window.__auroraCursor.pulse()", null)
         }, 40)
     }
