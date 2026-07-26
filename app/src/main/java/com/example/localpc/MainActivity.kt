@@ -306,6 +306,32 @@ class MainActivity : ComponentActivity() {
         }
         return super.dispatchGenericMotionEvent(event)
     }
+
+    // A real mouse's button press/drag/release ALSO generates a parallel
+    // ACTION_DOWN/MOVE/UP stream classified as touch-like (Android
+    // considers SOURCE_MOUSE + those actions "a touch event" for gesture
+    // purposes), delivered via dispatchTouchEvent, separately from the
+    // ACTION_BUTTON_PRESS/RELEASE handled above. Without this override
+    // that parallel stream fell through to the phone's OWN Compose UI --
+    // this is what made a USB mouse's drag-while-held movement not reach
+    // the TV at all, and risked incidentally clicking phone UI underneath.
+    // DOWN/UP are intentionally ignored here (already handled as
+    // BUTTON_PRESS/RELEASE above) to avoid double-firing the same click.
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (RemoteInputSettings.usbPassthroughEnabled &&
+            (event.source and InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE
+        ) {
+            if (event.actionMasked == MotionEvent.ACTION_MOVE) {
+                val dx = event.x - lastPhysX
+                val dy = event.y - lastPhysY
+                PresentationBridge.current?.moveCursorBy(dx, dy, dragging = true)
+                lastPhysX = event.x
+                lastPhysY = event.y
+            }
+            return true
+        }
+        return super.dispatchTouchEvent(event)
+    }
 }
 
 @Composable
