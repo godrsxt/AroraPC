@@ -37,7 +37,7 @@
 
   Notifications.init();
   InputEngine.init();
-  if(window.AppManager){
+  if((typeof AppManager !== "undefined")){
     try{ await AppManager.restoreInstalledApps(); }
     catch(e){ console.error('[AppManager] restoreInstalledApps failed, continuing boot:', e); }
   }
