@@ -49,4 +49,5 @@ dependencies {
     // https-style virtual origin instead of file://, which is what
     // Aurora's own README recommends for reliable IndexedDB support.
     implementation("androidx.webkit:webkit:1.12.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 }
