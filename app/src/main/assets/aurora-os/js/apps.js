@@ -87,16 +87,16 @@ const AppManager = (() => {
     if(idx === -1) list.push(manifest); else list.splice(idx, 1, manifest);
     await AuroraStorage.kvSet(INSTALLED_KEY, list);
 
-    if(window.Desktop && Desktop.renderIcons) Desktop.renderIcons();
-    if(window.Taskbar && Taskbar.renderStartApps) Taskbar.renderStartApps();
+    if((typeof Desktop !== "undefined") && Desktop.renderIcons) Desktop.renderIcons();
+    if((typeof Taskbar !== "undefined") && Taskbar.renderStartApps) Taskbar.renderStartApps();
     Bus.emit('app:installed', { id: manifest.id });
   }
 
   async function uninstall(appId){
     const list = await AuroraStorage.kvGet(INSTALLED_KEY, []);
     await AuroraStorage.kvSet(INSTALLED_KEY, list.filter(m => m.id !== appId));
-    if(window.Desktop && Desktop.renderIcons) Desktop.renderIcons();
-    if(window.Taskbar && Taskbar.renderStartApps) Taskbar.renderStartApps();
+    if((typeof Desktop !== "undefined") && Desktop.renderIcons) Desktop.renderIcons();
+    if((typeof Taskbar !== "undefined") && Taskbar.renderStartApps) Taskbar.renderStartApps();
     Bus.emit('app:uninstalled', { id: appId });
   }
 
@@ -119,14 +119,14 @@ const AppManager = (() => {
   async function hideFromDesktop(appId){
     desktopHidden.add(appId);
     await AuroraStorage.kvSet(HIDDEN_KEY, Array.from(desktopHidden));
-    if(window.Desktop && Desktop.renderIcons) Desktop.renderIcons();
+    if((typeof Desktop !== "undefined") && Desktop.renderIcons) Desktop.renderIcons();
   }
 
   /** Puts a previously-removed app's icon back on the desktop. */
   async function showOnDesktop(appId){
     desktopHidden.delete(appId);
     await AuroraStorage.kvSet(HIDDEN_KEY, Array.from(desktopHidden));
-    if(window.Desktop && Desktop.renderIcons) Desktop.renderIcons();
+    if((typeof Desktop !== "undefined") && Desktop.renderIcons) Desktop.renderIcons();
   }
 
   function isHiddenFromDesktop(appId){
