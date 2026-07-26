@@ -34,6 +34,8 @@ const AppRegistry = (() => {
    ========================================================= */
 const AppManager = (() => {
   const INSTALLED_KEY = 'installed-apps';
+  const HIDDEN_KEY = 'desktop-hidden-apps';
+  let desktopHidden = new Set();
   const LOCAL_APPS_ORIGIN = 'https://appassets.androidplatform.net/local-apps/';
 
   function buildMountFor(manifest){
@@ -108,7 +110,31 @@ const AppManager = (() => {
   async function restoreInstalledApps(){
     const list = await AuroraStorage.kvGet(INSTALLED_KEY, []);
     list.forEach(registerManifest);
+    const hiddenList = await AuroraStorage.kvGet(HIDDEN_KEY, []);
+    desktopHidden = new Set(hiddenList);
   }
 
-  return { install, uninstall, installedIds, restoreInstalledApps };
+  /** Removes an app's icon from the desktop without uninstalling it --
+   *  it stays reachable from Start menu > All apps. */
+  async function hideFromDesktop(appId){
+    desktopHidden.add(appId);
+    await AuroraStorage.kvSet(HIDDEN_KEY, Array.from(desktopHidden));
+    if(window.Desktop && Desktop.renderIcons) Desktop.renderIcons();
+  }
+
+  /** Puts a previously-removed app's icon back on the desktop. */
+  async function showOnDesktop(appId){
+    desktopHidden.delete(appId);
+    await AuroraStorage.kvSet(HIDDEN_KEY, Array.from(desktopHidden));
+    if(window.Desktop && Desktop.renderIcons) Desktop.renderIcons();
+  }
+
+  function isHiddenFromDesktop(appId){
+    return desktopHidden.has(appId);
+  }
+
+  return {
+    install, uninstall, installedIds, restoreInstalledApps,
+    hideFromDesktop, showOnDesktop, isHiddenFromDesktop
+  };
 })();
