@@ -1069,18 +1069,19 @@ class CastPresentation(context: Context, display: Display) : Presentation(contex
         )
     }
 
-    /** Moves the cursor by a relative delta. `dragging=true` reports the
-     *  move to JS as a held-button drag (for window-drag/selection);
-     *  otherwise it's a plain native hover move. */
+    /** Moves the cursor by a relative delta. `dragging=true` sends a real
+     *  ACTION_MOVE with the left button held (for window-drag/selection/
+     *  scrollbar-thumb dragging); otherwise it's a plain native hover move.
+     *  This is genuine Android input dispatch -- it crosses into sandboxed
+     *  iframes correctly (installed apps) and triggers native text-field
+     *  behaviors, unlike a JS-dispatched synthetic event. */
     fun moveCursorBy(dx: Float, dy: Float, dragging: Boolean) {
         cursorX = (cursorX + dx).coerceIn(0f, webView.width.toFloat())
         cursorY = (cursorY + dy).coerceIn(0f, webView.height.toFloat())
-        val cssX = cursorX * cssWidthScale
-        val cssY = cursorY * cssHeightScale
         webView.post {
             if (dragging) {
-                webView.evaluateJavascript(
-                    "window.__auroraCursor && window.__auroraCursor.dragMove(${cssX}, ${cssY})", null
+                webView.dispatchTouchEvent(
+                    buildMouseEvent(MotionEvent.ACTION_MOVE, MotionEvent.BUTTON_PRIMARY, leftDownTime)
                 )
             } else {
                 webView.dispatchGenericMotionEvent(
@@ -1092,63 +1093,55 @@ class CastPresentation(context: Context, display: Display) : Presentation(contex
     }
 
     fun pressLeft() {
-        val cssX = cursorX * cssWidthScale
-        val cssY = cursorY * cssHeightScale
+        leftDownTime = SystemClock.uptimeMillis()
         webView.post {
-            webView.evaluateJavascript(
-                "window.__auroraCursor && window.__auroraCursor.dragStart(${cssX}, ${cssY})", null
-            )
+            // A real mouse always exits hover state right before a press --
+            // Chromium's internal pointer state machine expects that
+            // transition to cleanly switch from hovering to pressed.
+            webView.dispatchGenericMotionEvent(buildMouseEvent(MotionEvent.ACTION_HOVER_EXIT, 0, leftDownTime))
+            webView.dispatchTouchEvent(buildMouseEvent(MotionEvent.ACTION_DOWN, MotionEvent.BUTTON_PRIMARY, leftDownTime))
         }
     }
 
     fun releaseLeft() {
-        val cssX = cursorX * cssWidthScale
-        val cssY = cursorY * cssHeightScale
         webView.post {
-            webView.evaluateJavascript(
-                "window.__auroraCursor && window.__auroraCursor.dragEnd(${cssX}, ${cssY})", null
-            )
+            webView.dispatchTouchEvent(buildMouseEvent(MotionEvent.ACTION_UP, 0, leftDownTime))
+            val resumeTime = SystemClock.uptimeMillis()
+            webView.dispatchGenericMotionEvent(buildMouseEvent(MotionEvent.ACTION_HOVER_ENTER, 0, resumeTime))
+            webView.dispatchGenericMotionEvent(buildMouseEvent(MotionEvent.ACTION_HOVER_MOVE, 0, resumeTime))
+            webView.evaluateJavascript("window.__auroraCursor && window.__auroraCursor.pulse()", null)
         }
     }
 
+    /** A real click is just a quick press+release -- the browser's own
+     *  double-click detection (same timing window as any desktop OS)
+     *  handles opening icons on a second tap; no JS click-synthesis needed. */
     fun tapClick() {
-        val cssX = cursorX * cssWidthScale
-        val cssY = cursorY * cssHeightScale
-        webView.post {
-            webView.evaluateJavascript(
-                "window.__auroraCursor && window.__auroraCursor.clickAt(${cssX}, ${cssY}, 0)", null
-            )
-        }
+        pressLeft()
+        webView.postDelayed({ releaseLeft() }, 60)
     }
 
     fun pressRight() {
-        val cssX = cursorX * cssWidthScale
-        val cssY = cursorY * cssHeightScale
+        rightDownTime = SystemClock.uptimeMillis()
         webView.post {
-            webView.evaluateJavascript(
-                "window.__auroraCursor && window.__auroraCursor.dragStart(${cssX}, ${cssY})", null
-            )
+            webView.dispatchGenericMotionEvent(buildMouseEvent(MotionEvent.ACTION_HOVER_EXIT, 0, rightDownTime))
+            webView.dispatchTouchEvent(buildMouseEvent(MotionEvent.ACTION_DOWN, MotionEvent.BUTTON_SECONDARY, rightDownTime))
         }
     }
 
     fun releaseRight() {
-        val cssX = cursorX * cssWidthScale
-        val cssY = cursorY * cssHeightScale
         webView.post {
-            webView.evaluateJavascript(
-                "window.__auroraCursor && window.__auroraCursor.dragEnd(${cssX}, ${cssY})", null
-            )
+            webView.dispatchTouchEvent(buildMouseEvent(MotionEvent.ACTION_UP, 0, rightDownTime))
+            val resumeTime = SystemClock.uptimeMillis()
+            webView.dispatchGenericMotionEvent(buildMouseEvent(MotionEvent.ACTION_HOVER_ENTER, 0, resumeTime))
+            webView.dispatchGenericMotionEvent(buildMouseEvent(MotionEvent.ACTION_HOVER_MOVE, 0, resumeTime))
+            webView.evaluateJavascript("window.__auroraCursor && window.__auroraCursor.pulse()", null)
         }
     }
 
     fun tapRightClick() {
-        val cssX = cursorX * cssWidthScale
-        val cssY = cursorY * cssHeightScale
-        webView.post {
-            webView.evaluateJavascript(
-                "window.__auroraCursor && window.__auroraCursor.clickAt(${cssX}, ${cssY}, 2)", null
-            )
-        }
+        pressRight()
+        webView.postDelayed({ releaseRight() }, 60)
     }
 
     // ---- Keyboard bridge ----
