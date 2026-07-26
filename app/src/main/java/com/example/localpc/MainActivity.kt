@@ -1015,7 +1015,9 @@ class CastPresentation(context: Context, display: Display) : Presentation(contex
      *  so it can be spliced directly into the call. */
     fun installApp(manifestJson: String) {
         webView.post {
-            webView.evaluateJavascript("window.AppManager && AppManager.install($manifestJson)", null)
+            webView.evaluateJavascript(
+                "typeof AppManager !== 'undefined' && AppManager.install($manifestJson)", null
+            )
         }
     }
 
