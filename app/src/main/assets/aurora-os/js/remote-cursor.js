@@ -1,24 +1,35 @@
-/* remote-cursor.js — visual cursor, PLUS a reliable "smart activate" for
-   Aurora's own top-level UI (icons, buttons, taskbar items).
+/* remote-cursor.js — visual cursor, PLUS a reliable "smart activate" that
+   covers ALL of Aurora's own top-level content -- desktop/taskbar chrome
+   AND whatever arbitrary UI a built-in app (Notepad, Calculator, Settings,
+   etc.) renders inside its own window, since those all mount real DOM
+   directly into the page (only third-party apps use an iframe).
 
    Why this exists instead of relying purely on native MotionEvent
-   dispatch: we can no longer tell, without device logs, whether
-   Chromium's internal touch-to-click translation is actually producing
-   real 'click'/'dblclick' DOM events from our synthetic touch input, or
-   only registering at the Android View level (which is all "consumed"
-   in the debug log actually proves). Rather than keep guessing at that
-   pipeline, for anything that is definitely NOT inside a sandboxed
-   iframe and definitely NOT a text input, we skip the translation
-   uncertainty entirely and call the DOM's own reliable activation
-   directly (.click(), or a manually dispatched 'dblclick').
+   dispatch: there's no way, without device logs, to confirm Chromium's
+   internal touch-to-click translation is actually producing real
+   'click'/'dblclick' DOM events from synthetic touch input, vs. only
+   registering at the Android View level. Rather than keep guessing at
+   that pipeline, for anything that is definitely NOT inside a sandboxed
+   iframe and definitely NOT a native-input-requiring element, this calls
+   the DOM's own activation directly (.click(), or a manually dispatched
+   'dblclick') -- guaranteed to work regardless of that pipeline.
+
+   IMPORTANT: this does NOT try to guess what counts as "clickable" via a
+   list of CSS classes/tags (that's what broke interaction inside opened
+   app windows last time -- an app's own buttons/menu items don't
+   necessarily match any hardcoded selector). Instead .click()/'dblclick'
+   is dispatched on the EXACT element under the cursor -- .click() is
+   safe to call on any element; if nothing is listening, it's a no-op,
+   and it still bubbles to whatever ancestor listener actually handles it
+   (exactly how Aurora's own delegated click handlers already work).
 
    This does NOT reintroduce the earlier iframe/text-selection problem:
-   - If the point is over an <iframe>, this returns false and Kotlin
-     falls back to real native dispatch (the only way to reach inside a
-     sandboxed iframe).
-   - If the point is over a text input/textarea/contenteditable, this
-     also returns false, so native dispatch (which supports real focus,
-     caret placement, and drag-to-select) still handles those. */
+   - If the point is over (or inside) an <iframe>, this returns false and
+     Kotlin falls back to real native dispatch (the only way to reach
+     inside a sandboxed iframe at all).
+   - If the point is over a text input/textarea/select/contenteditable,
+     this also returns false, so native dispatch (which supports real
+     focus, caret placement, and drag-to-select) handles those. */
 (function () {
   const el = document.getElementById('remote-cursor');
   if (!el) return;
@@ -36,36 +47,30 @@
     setTimeout(() => el.classList.remove('clicking'), 120);
   }
 
-  /** Returns true if it handled the activation itself (Aurora's own UI),
-   *  false if Kotlin should fall back to native dispatch (iframe / text
-   *  input / nothing actionable there). */
-  function smartActivate(x, y, isDoubleTap) {
-    const el = document.elementFromPoint(x, y);
-    if (!el) return false;
+  function needsNativeInput(target) {
+    if (!target) return true;
+    if (target.closest('iframe')) return true;
+    if (target.closest('input, textarea, select, [contenteditable="true"]')) return true;
+    return false;
+  }
 
-    if (el.tagName === 'IFRAME') return false; // installed app -- needs native
-    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable) {
-      return false; // needs native for real focus/caret/selection
-    }
+  /** Returns true if it handled the activation itself, false if Kotlin
+   *  should fall back to real native dispatch (iframe / text-like input
+   *  / nothing there at all). */
+  function smartActivate(x, y, isDoubleTap) {
+    const target = document.elementFromPoint(x, y);
+    if (!target) return false;
+    if (needsNativeInput(target)) return false;
 
     if (isDoubleTap) {
-      const icon = el.closest('.desktop-icon');
-      if (icon) {
-        icon.dispatchEvent(new MouseEvent('dblclick', {
-          bubbles: true, cancelable: true, clientX: x, clientY: y, view: window
-        }));
-        return true;
-      }
-    }
-
-    const clickable = el.closest(
-      'button, .taskbar-btn, .start-app, .desktop-icon, [role="button"], a, .win-ctrl, .icon-btn'
-    );
-    if (clickable) {
-      clickable.click();
+      target.dispatchEvent(new MouseEvent('dblclick', {
+        bubbles: true, cancelable: true, clientX: x, clientY: y, view: window
+      }));
       return true;
     }
-    return false;
+
+    target.click(); // safe on any element; bubbles to whatever listener handles it
+    return true;
   }
 
   // Exposed for Kotlin to call via evaluateJavascript.
