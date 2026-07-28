@@ -176,4 +176,25 @@ const Icons = {
     <svg viewBox="0 0 24 24" width="100%" height="100%" fill="none">
       <path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
     </svg>`,
+
+  typing: () => `
+    <svg viewBox="0 0 48 48" width="100%" height="100%">
+      <defs>
+        <linearGradient id="tpA" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#3B3D40"/><stop offset="1" stop-color="#232426"/>
+        </linearGradient>
+      </defs>
+      <rect x="4" y="12" width="40" height="26" rx="4" fill="url(#tpA)"/>
+      <rect x="9" y="17" width="5" height="5" rx="1" fill="#E2B714"/>
+      <rect x="16" y="17" width="5" height="5" rx="1" fill="#D1D0C5"/>
+      <rect x="23" y="17" width="5" height="5" rx="1" fill="#D1D0C5"/>
+      <rect x="30" y="17" width="5" height="5" rx="1" fill="#D1D0C5"/>
+      <rect x="37" y="17" width="4" height="5" rx="1" fill="#D1D0C5"/>
+      <rect x="9" y="24" width="5" height="5" rx="1" fill="#D1D0C5"/>
+      <rect x="16" y="24" width="5" height="5" rx="1" fill="#D1D0C5"/>
+      <rect x="23" y="24" width="5" height="5" rx="1" fill="#D1D0C5"/>
+      <rect x="30" y="24" width="5" height="5" rx="1" fill="#D1D0C5"/>
+      <rect x="37" y="24" width="4" height="5" rx="1" fill="#D1D0C5"/>
+      <rect x="13" y="31" width="22" height="5" rx="1.5" fill="#D1D0C5"/>
+    </svg>`,
 };
